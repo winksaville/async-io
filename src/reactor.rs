@@ -209,7 +209,7 @@ impl Reactor {
         drop(timers);
 
         // Add wakers to the list.
-        log::trace!("process_timers: {} ready wakers", ready.len());
+        log::debug!("process_timers: {} ready wakers", ready.len());
         for (_, waker) in ready {
             wakers.push(waker);
         }
@@ -321,7 +321,7 @@ impl ReactorLock<'_> {
         };
 
         // Wake up ready tasks.
-        log::trace!("react: {} ready wakers", wakers.len());
+        log::debug!("react: {} ready wakers", wakers.len());
         for waker in wakers {
             // Don't let a panicking waker blow everything up.
             panic::catch_unwind(|| waker.wake()).ok();
