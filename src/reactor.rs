@@ -407,6 +407,7 @@ impl Source {
     ///
     /// If a different waker is already registered, it gets replaced and woken.
     fn poll_ready(&self, dir: usize, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        log::trace!("Source::poll_ready:+ dir={}", dir);
         let mut state = self.state.lock().unwrap();
 
         // Check if the reactor has delivered an event.
@@ -415,36 +416,50 @@ impl Source {
             // that means a newer reactor tick has delivered an event.
             if state[dir].tick != a && state[dir].tick != b {
                 state[dir].ticks = None;
+                log::trace!("Source::poll_ready:- dir={} Poll::Ready(OK(())", dir);
                 return Poll::Ready(Ok(()));
             }
         }
 
         let was_empty = state[dir].is_empty();
+        log::trace!("Source::poll_ready:  dir={} was_empty={}", dir, was_empty);
 
         // Register the current task's waker.
         if let Some(w) = state[dir].waker.take() {
             if w.will_wake(cx.waker()) {
                 state[dir].waker = Some(w);
+                log::trace!("Source::poll_ready:- dir={} Poll::Pending waker", dir);
                 return Poll::Pending;
             }
             // Wake the previous waker because it's going to get replaced.
-            panic::catch_unwind(|| w.wake()).ok();
+            log::trace!(r#"Source::poll_ready:  dir={} "wake previous waker via panic::catch_unwind""#, dir);
+            panic::catch_unwind(|| {
+                log::trace!("Source::poll_ready:  dir={} actually waking previous waker", dir);
+                w.wake()
+            }).ok();
         }
+        log::trace!("Source::poll_ready:  dir={} setup new waker and new ticks", dir);
         state[dir].waker = Some(cx.waker().clone());
         state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
 
         // Update interest in this I/O handle.
         if was_empty {
-            Reactor::get().poller.modify(
+            log::trace!("Source::poll_ready:  dir={} was empty, call poller.modify", dir);
+            if  let Err(e) = Reactor::get().poller.modify(
                 self.raw,
                 Event {
                     key: self.key,
                     readable: !state[READ].is_empty(),
                     writable: !state[WRITE].is_empty(),
                 },
-            )?;
+            ) {
+                log::trace!("Source::poll_ready:  dir={} was empty, retf poller.modify Error: {}", dir, e);
+            } else {
+                log::trace!("Source::poll_ready:  dir={} was empty, retf poller.modify Ok", dir);
+            }
         }
 
+        log::trace!("Source::poll_ready:- dir={} Poll::Pending at bottom", dir);
         Poll::Pending
     }
 
