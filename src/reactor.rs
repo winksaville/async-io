@@ -67,6 +67,7 @@ pub(crate) struct Reactor {
 impl Reactor {
     /// Returns a reference to the reactor.
     pub(crate) fn get() -> &'static Reactor {
+        log::trace!("Reactor::get:+");
         static REACTOR: Lazy<Reactor> = Lazy::new(|| {
             crate::driver::init();
             Reactor {
@@ -78,12 +79,15 @@ impl Reactor {
                 timer_ops: ConcurrentQueue::bounded(1000),
             }
         });
+        log::trace!("Reactor::get:-");
         &REACTOR
     }
 
     /// Returns the current ticker.
     pub(crate) fn ticker(&self) -> usize {
-        self.ticker.load(Ordering::SeqCst)
+        let val = self.ticker.load(Ordering::SeqCst);
+        log::trace!("Reactor::ticker:+- val={}", val);
+        val
     }
 
     /// Registers an I/O source in the reactor.
@@ -92,6 +96,7 @@ impl Reactor {
         #[cfg(unix)] raw: RawFd,
         #[cfg(windows)] raw: RawSocket,
     ) -> io::Result<Arc<Source>> {
+        log::trace!("Reactor::insert_io:+ raw fd={}", raw);
         // Create an I/O source for this file descriptor.
         let source = {
             let mut sources = self.sources.lock().unwrap();
@@ -107,16 +112,19 @@ impl Reactor {
 
         // Register the file descriptor.
         if let Err(err) = self.poller.add(raw, Event::none(source.key)) {
+            log::trace!("Reactor::insert_io:- raw fd={} error registering with poller.add: {}", raw, err);
             let mut sources = self.sources.lock().unwrap();
             sources.remove(source.key);
             return Err(err);
         }
 
+        log::trace!("Reactor::insert_io:- raw fd={} source={:?}", raw, source);
         Ok(source)
     }
 
     /// Deregisters an I/O source from the reactor.
     pub(crate) fn remove_io(&self, source: &Source) -> io::Result<()> {
+        log::trace!("Reactor::remove_io:+- source {:?} ", source);
         let mut sources = self.sources.lock().unwrap();
         sources.remove(source.key);
         self.poller.delete(source.raw)
@@ -129,6 +137,7 @@ impl Reactor {
         // Generate a new timer ID.
         static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
         let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
+        log::trace!("Reactor::insert_timer:+ id={} when {:?}", id, when);
 
         // Push an insert operation.
         while self
@@ -136,30 +145,39 @@ impl Reactor {
             .push(TimerOp::Insert(when, id, waker.clone()))
             .is_err()
         {
+            log::trace!("Reactor::insert_timer: full drain+");
             // If the queue is full, drain it and try again.
             let mut timers = self.timers.lock().unwrap();
             self.process_timer_ops(&mut timers);
+            log::trace!("Reactor::insert_timer: full drain-");
         }
 
         // Notify that a timer has been inserted.
+        log::trace!("Reactor::insert_timer:  id={} when {:?} call notify", id, when);
         self.notify();
 
+        log::trace!("Reactor::insert_timer:- id={} when {:?} retf notify", id, when);
         id
     }
 
     /// Deregisters a timer from the reactor.
     pub(crate) fn remove_timer(&self, when: Instant, id: usize) {
+        log::trace!("Reactor::remove_timer:  id={} when {:?}", id, when);
         // Push a remove operation.
         while self.timer_ops.push(TimerOp::Remove(when, id)).is_err() {
+            log::trace!("Reactor::remove_timer: full drain+");
             // If the queue is full, drain it and try again.
             let mut timers = self.timers.lock().unwrap();
             self.process_timer_ops(&mut timers);
+            log::trace!("Reactor::remove_timer: full drain-");
         }
     }
 
     /// Notifies the thread blocked on the reactor.
     pub(crate) fn notify(&self) {
+        log::trace!("Reactor::notify:+");
         self.poller.notify().expect("failed to notify reactor");
+        log::trace!("Reactor::notify:-");
     }
 
     /// Locks the reactor, potentially blocking if the lock is held by another thread.
@@ -181,7 +199,10 @@ impl Reactor {
     ///
     /// Returns the duration until the next timer before this method was called.
     fn process_timers(&self, wakers: &mut Vec<Waker>) -> Option<Duration> {
+        log::trace!("Reactor::process_timers:+ wakers.len={}", wakers.len());
+
         let mut timers = self.timers.lock().unwrap();
+        log::trace!("Reactor::process_timers: wakers.len={} timers locked", wakers.len());
         self.process_timer_ops(&mut timers);
 
         let now = Instant::now();
@@ -206,32 +227,39 @@ impl Reactor {
         };
 
         // Drop the lock before waking.
+        log::trace!("Reactor::process_timers: wakers.len={} timers dropping", wakers.len());
         drop(timers);
+        log::trace!("Reactor::process_timers: wakers.len={} timers dropped", wakers.len());
 
         // Add wakers to the list.
-        log::debug!("process_timers: {} ready wakers", ready.len());
+        log::debug!("Reactor::process_timers: {} ready wakers", ready.len());
         for (_, waker) in ready {
             wakers.push(waker);
         }
 
+        log::trace!("Reactor::process_timers:- wakers.len={} dur={:?}", wakers.len(), dur);
         dur
     }
 
     /// Processes queued timer operations.
     fn process_timer_ops(&self, timers: &mut MutexGuard<'_, BTreeMap<(Instant, usize), Waker>>) {
+        log::trace!("Reactor::process_timer_ops:+");
         // Process only as much as fits into the queue, or else this loop could in theory run
         // forever.
         for _ in 0..self.timer_ops.capacity().unwrap() {
             match self.timer_ops.pop() {
                 Ok(TimerOp::Insert(when, id, waker)) => {
+                    log::trace!("Reactor::process_timer_ops: insert id={} when={:?}", id, when);
                     timers.insert((when, id), waker);
                 }
                 Ok(TimerOp::Remove(when, id)) => {
+                    log::trace!("Reactor::process_timer_ops: remove id={} when={:?}", id, when);
                     timers.remove(&(when, id));
                 }
                 Err(_) => break,
             }
         }
+        log::trace!("Reactor::process_timer_ops:-");
     }
 }
 
@@ -244,6 +272,7 @@ pub(crate) struct ReactorLock<'a> {
 impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
     pub(crate) fn react(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        log::trace!("ReactorLock::react:+ tid={}", std::thread::current().id().as_u64());
         let mut wakers = Vec::new();
 
         // Process ready timers.
@@ -321,12 +350,13 @@ impl ReactorLock<'_> {
         };
 
         // Wake up ready tasks.
-        log::debug!("react: {} ready wakers", wakers.len());
+        log::debug!("ReactLock::react: {} ready wakers", wakers.len());
         for waker in wakers {
             // Don't let a panicking waker blow everything up.
             panic::catch_unwind(|| waker.wake()).ok();
         }
 
+        log::trace!("ReactorLock::react:- tid={} res={:?}", std::thread::current().id().as_u64(), res);
         res
     }
 }

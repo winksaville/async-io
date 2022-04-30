@@ -55,6 +55,8 @@
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
+#![feature(thread_id_value)]
+
 use std::convert::TryFrom;
 use std::future::Future;
 use std::io::{self, IoSlice, IoSliceMut, Read, Write};
