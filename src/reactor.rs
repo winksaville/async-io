@@ -25,6 +25,10 @@ use slab::Slab;
 const READ: usize = 0;
 const WRITE: usize = 1;
 
+fn tid() -> std::num::NonZeroU64 {
+    std::thread::current().id().as_u64()
+}
+
 /// The reactor.
 ///
 /// There is only one global instance of this type, accessible by [`Reactor::get()`].
@@ -272,7 +276,7 @@ pub(crate) struct ReactorLock<'a> {
 impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
     pub(crate) fn react(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        log::trace!("ReactorLock::react:+ tid={}", std::thread::current().id().as_u64());
+        log::trace!("ReactorLock::react:+ tid={}", tid());
         let mut wakers = Vec::new();
 
         // Process ready timers.
@@ -356,7 +360,7 @@ impl ReactorLock<'_> {
             panic::catch_unwind(|| waker.wake()).ok();
         }
 
-        log::trace!("ReactorLock::react:- tid={} res={:?}", std::thread::current().id().as_u64(), res);
+        log::trace!("ReactorLock::react:- tid={} res={:?}", tid(), res);
         res
     }
 }
@@ -437,8 +441,8 @@ impl Source {
     ///
     /// If a different waker is already registered, it gets replaced and woken.
     fn poll_ready(&self, dir: usize, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        log::trace!("Source::poll_ready:+ dir={}", dir);
         let mut state = self.state.lock().unwrap();
+        log::trace!("Source::poll_ready:+ tid={} dir={} tick={} ticks={:?}", tid(), dir, state[dir].tick, state[dir].ticks);
 
         // Check if the reactor has delivered an event.
         if let Some((a, b)) = state[dir].ticks {
@@ -446,7 +450,7 @@ impl Source {
             // that means a newer reactor tick has delivered an event.
             if state[dir].tick != a && state[dir].tick != b {
                 state[dir].ticks = None;
-                log::trace!("Source::poll_ready:- dir={} Poll::Ready(OK(())", dir);
+                log::trace!("Source::poll_ready:- dir={} tick={} ticks={:?} Poll::Ready(OK(())", dir, state[dir].tick, state[dir].ticks);
                 return Poll::Ready(Ok(()));
             }
         }
@@ -471,6 +475,7 @@ impl Source {
         log::trace!("Source::poll_ready:  dir={} setup new waker and new ticks", dir);
         state[dir].waker = Some(cx.waker().clone());
         state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
+        log::trace!("Source::poll_ready:  dir={} tick={} ticks={:?}", dir, state[dir].tick, state[dir].ticks);
 
         // Update interest in this I/O handle.
         if was_empty {
@@ -515,13 +520,17 @@ impl Source {
 
     /// Waits until the I/O source is readable or writable.
     fn ready<H: Borrow<crate::Async<T>> + Clone, T>(handle: H, dir: usize) -> Ready<H, T> {
-        Ready {
+
+        let r = Ready {
             handle,
             dir,
             ticks: None,
             index: None,
             _guard: None,
-        }
+        };
+        log::trace!("Source::ready:- dir={} ready.ticks=None", dir);
+
+        r
     }
 }
 
@@ -635,6 +644,7 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
             // If `state[dir].tick` has changed to a value other than the old reactor tick,
             // that means a newer reactor tick has delivered an event.
             if state[*dir].tick != a && state[*dir].tick != b {
+                log::trace!("Ready::Future::poll:- dir={} tick={} ticks={:?} Ready.ticks={:?} Poll::Ready(Ok(())", dir, state[*dir].tick, state[*dir].ticks, (a, b));
                 return Poll::Ready(Ok(()));
             }
         }
@@ -653,7 +663,9 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
                     _marker: PhantomData,
                 });
                 *index = Some(i);
-                *ticks = Some((Reactor::get().ticker(), state[*dir].tick));
+                let rticks = Some((Reactor::get().ticker(), state[*dir].tick));
+                *ticks = rticks;
+                log::trace!("Ready::Future::poll: dir={} tick={} ticks={:?} Ready.ticks={:?} register call poller.modify Poll::Pending)", dir, state[*dir].tick, state[*dir].ticks, rticks);
                 i
             }
         };
@@ -661,16 +673,17 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
 
         // Update interest in this I/O handle.
         if was_empty {
-            Reactor::get().poller.modify(
-                handle.borrow().source.raw,
-                Event {
+            let raw = handle.borrow().source.raw;
+            let ev = Event {
                     key: handle.borrow().source.key,
                     readable: !state[READ].is_empty(),
                     writable: !state[WRITE].is_empty(),
-                },
-            )?;
+                };
+            log::trace!("Ready::Future::poll: dir={} tick={} ticks={:?} register call poller.modify raw={} ev={:?} Poll::Pending)", dir, state[*dir].tick, state[*dir].ticks, raw, ev);
+            Reactor::get().poller.modify(raw, ev)?;
         }
 
+        log::trace!("Ready::Future::poll:- dir={} tick={} ticks={:?} Poll::Pending)", dir, state[*dir].tick, state[*dir].ticks);
         Poll::Pending
     }
 }
