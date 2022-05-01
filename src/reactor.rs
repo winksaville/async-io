@@ -99,6 +99,7 @@ impl Reactor {
         #[cfg(windows)] raw: RawSocket,
     ) -> io::Result<Arc<Source>> {
         log::trace!("Reactor::insert_io:+ raw fd={}", raw);
+
         // Create an I/O source for this file descriptor.
         let source = {
             let mut sources = self.sources.lock().unwrap();
@@ -471,7 +472,7 @@ impl Source {
             // that means a newer reactor tick has delivered an event.
             if state[dir].tick != a && state[dir].tick != b {
                 state[dir].ticks = None;
-                log::trace!("Source::poll_ready:- dir={} tick={} ticks={:?} Poll::Ready(OK(())", dir, state[dir].tick, state[dir].ticks);
+                log::trace!("Source::poll_ready:- tid={} dir={} tick={} ticks={:?} Poll::Ready(OK(())", tid(), dir, state[dir].tick, state[dir].ticks);
                 return Poll::Ready(Ok(()));
             }
         }
@@ -483,24 +484,26 @@ impl Source {
         if let Some(w) = state[dir].waker.take() {
             if w.will_wake(cx.waker()) {
                 state[dir].waker = Some(w);
-                log::trace!("Source::poll_ready:- dir={} Poll::Pending waker", dir);
+                log::trace!("Source::poll_ready:- tid={}  dir={} Poll::Pending waker", tid(), dir);
+                log::trace!("Source::poll_ready backtrace\n{}", std::backtrace::Backtrace::force_capture());
                 return Poll::Pending;
             }
             // Wake the previous waker because it's going to get replaced.
-            log::trace!(r#"Source::poll_ready:  dir={} "wake previous waker via panic::catch_unwind""#, dir);
+            log::trace!(r#"Source::poll_ready: tid={} dir={} "wake previous waker via panic::catch_unwind""#, tid(), dir);
             panic::catch_unwind(|| {
-                log::trace!("Source::poll_ready:  dir={} actually waking previous waker", dir);
+                log::trace!("Source::poll_ready: tid={} dir={} actually waking previous waker", tid(), dir);
                 w.wake()
             }).ok();
         }
-        log::trace!("Source::poll_ready:  dir={} setup new waker and new ticks", dir);
+        log::trace!("Source::poll_ready: tid={} dir={} setup new waker and new ticks", tid(), dir);
+        log::trace!("Source::poll_ready backtrace\n{}", std::backtrace::Backtrace::force_capture());
         state[dir].waker = Some(cx.waker().clone());
         state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
-        log::trace!("Source::poll_ready:  dir={} tick={} ticks={:?}", dir, state[dir].tick, state[dir].ticks);
+        log::trace!("Source::poll_ready: tid={} dir={} tick={} ticks={:?}", tid(), dir, state[dir].tick, state[dir].ticks);
 
         // Update interest in this I/O handle.
         if was_empty {
-            log::trace!("Source::poll_ready:  dir={} was empty, call poller.modify", dir);
+            log::trace!("Source::poll_ready: tid={} dir={} was empty, call poller.modify", tid(), dir);
             if  let Err(e) = Reactor::get().poller.modify(
                 self.raw,
                 Event {
@@ -509,13 +512,13 @@ impl Source {
                     writable: !state[WRITE].is_empty(),
                 },
             ) {
-                log::trace!("Source::poll_ready:  dir={} was empty, retf poller.modify Error: {}", dir, e);
+                log::trace!("Source::poll_ready: tid={} dir={} was empty, retf poller.modify Error: {}", tid(), dir, e);
             } else {
-                log::trace!("Source::poll_ready:  dir={} was empty, retf poller.modify Ok", dir);
+                log::trace!("Source::poll_ready: tid={} dir={} was empty, retf poller.modify Ok", tid(), dir);
             }
         }
 
-        log::trace!("Source::poll_ready:- dir={} Poll::Pending at bottom", dir);
+        log::trace!("Source::poll_ready:- tid={} dir={} Poll::Pending at bottom", tid(), dir);
         Poll::Pending
     }
 
@@ -665,7 +668,7 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
             // If `state[dir].tick` has changed to a value other than the old reactor tick,
             // that means a newer reactor tick has delivered an event.
             if state[*dir].tick != a && state[*dir].tick != b {
-                log::trace!("Ready::Future::poll:- dir={} tick={} ticks={:?} Ready.ticks={:?} Poll::Ready(Ok(())", dir, state[*dir].tick, state[*dir].ticks, (a, b));
+                log::trace!("Ready::Future::poll:+- tid={} New tick ret Poll::Ready(Ok(()) dir={} tick={} ticks={:?} Ready.ticks={:?}", tid(), dir, state[*dir].tick, state[*dir].ticks, (a, b));
                 return Poll::Ready(Ok(()));
             }
         }
@@ -673,10 +676,12 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
         let was_empty = state[*dir].is_empty();
 
         // Register the current task's waker.
+        log::trace!("Ready::Future::poll:+ tid={} Register current task's waker dir={} tick={} ticks={:?} ", tid(), dir, state[*dir].tick, state[*dir].ticks);
         let i = match *index {
             Some(i) => i,
             None => {
                 let i = state[*dir].wakers.insert(None);
+                log::trace!("Ready::Future::poll: tid={} *index is None insert None at {} for the moment", tid(), i);
                 *_guard = Some(RemoveOnDrop {
                     handle: handle.clone(),
                     dir: *dir,
@@ -686,10 +691,12 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
                 *index = Some(i);
                 let rticks = Some((Reactor::get().ticker(), state[*dir].tick));
                 *ticks = rticks;
-                log::trace!("Ready::Future::poll: dir={} tick={} ticks={:?} Ready.ticks={:?} register call poller.modify Poll::Pending)", dir, state[*dir].tick, state[*dir].ticks, rticks);
                 i
             }
         };
+
+        log::trace!("Ready::Future::poll tid={} insert cx.waker().clone() at state[{}].wakers[{}]", tid(), *dir, i);
+        log::trace!("Ready::Future::poll backtrace\n{}", std::backtrace::Backtrace::force_capture());
         state[*dir].wakers[i] = Some(cx.waker().clone());
 
         // Update interest in this I/O handle.
@@ -700,7 +707,7 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
                     readable: !state[READ].is_empty(),
                     writable: !state[WRITE].is_empty(),
                 };
-            log::trace!("Ready::Future::poll: dir={} tick={} ticks={:?} register call poller.modify raw={} ev={:?} Poll::Pending)", dir, state[*dir].tick, state[*dir].ticks, raw, ev);
+            log::trace!("Ready::Future::poll: tid={} call poller.modify dir={} tick={} ticks={:?} raw={} ev={:?})", tid(), dir, state[*dir].tick, state[*dir].ticks, raw, ev);
             Reactor::get().poller.modify(raw, ev)?;
         }
 
