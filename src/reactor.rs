@@ -371,7 +371,7 @@ impl ReactorLock<'_> {
         };
 
         // Wake up ready tasks.
-        log::debug!("ReactorLock::react: wake up {} ready wakers", wakers.len());
+        log::debug!("ReactorLock::react: tid={} wake up {} ready wakers", tid(), wakers.len());
         let mut i = 0usize;
         for waker in wakers {
             // Don't let a panicking waker blow everything up.
