@@ -94,6 +94,12 @@ fn duration_max() -> Duration {
     Duration::new(std::u64::MAX, 1_000_000_000 - 1)
 }
 
+/// Thread ID
+fn tid() -> std::num::NonZeroU64 {
+    std::thread::current().id().as_u64()
+}
+
+
 /// A future or stream that emits timed events.
 ///
 /// Timers are futures that output a single [`Instant`] when they fire.

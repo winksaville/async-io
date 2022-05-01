@@ -22,12 +22,10 @@ use once_cell::sync::Lazy;
 use polling::{Event, Poller};
 use slab::Slab;
 
+use crate::tid;
+
 const READ: usize = 0;
 const WRITE: usize = 1;
-
-fn tid() -> std::num::NonZeroU64 {
-    std::thread::current().id().as_u64()
-}
 
 /// The reactor.
 ///

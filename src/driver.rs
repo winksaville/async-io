@@ -11,6 +11,7 @@ use once_cell::sync::Lazy;
 use waker_fn::waker_fn;
 
 use crate::reactor::Reactor;
+use crate::tid;
 
 /// Number of currently active `block_on()` invocations.
 static BLOCK_ON_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -39,48 +40,64 @@ pub(crate) fn init() {
 
 /// The main loop for the "async-io" thread.
 fn main_loop(parker: parking::Parker) {
+    log::trace!("main_loop:+");
+
     // The last observed reactor tick.
     let mut last_tick = 0;
     // Number of sleeps since this thread has called `react()`.
     let mut sleeps = 0u64;
 
     loop {
+        log::trace!("main_loop: TOL tid={} sleeps={}", tid(), sleeps);
+
         let tick = Reactor::get().ticker();
 
+        log::trace!("main_loop: last_tick={} tick={}", last_tick, tick);
         if last_tick == tick {
             let reactor_lock = if sleeps >= 10 {
                 // If no new ticks have occurred for a while, stop sleeping and spinning in
                 // this loop and just block on the reactor lock.
+                log::trace!("main_loop: last_tick={} tick={} get the Reactor lock", last_tick, tick);
                 Some(Reactor::get().lock())
             } else {
+                log::trace!("main_loop: last_tick={} tick={} TRY to get the Reactor lock", last_tick, tick);
                 Reactor::get().try_lock()
             };
 
             if let Some(mut reactor_lock) = reactor_lock {
-                log::trace!("main_loop: waiting on I/O");
+                log::trace!("main_loop: waiting on I/O have the lock, call reactor_lock.react(timeout: None)");
                 reactor_lock.react(None).ok();
+                log::trace!("main_loop: waiting on I/O have the lock, retf reactor_lock.react(timeout: None)");
                 last_tick = Reactor::get().ticker();
                 sleeps = 0;
+                log::trace!("main_loop: update last_tick={} zero sleeps {}", last_tick, sleeps);
             }
         } else {
             last_tick = tick;
+            log::trace!("main_loop: tick has changed update last_tick={} == tick={}", last_tick, tick);
         }
 
-        if BLOCK_ON_COUNT.load(Ordering::SeqCst) > 0 {
-            // Exponential backoff from 50us to 10ms.
-            let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
-                .get(sleeps as usize)
-                .unwrap_or(&10_000);
+        {
+            let block_on_count = BLOCK_ON_COUNT.load(Ordering::SeqCst);
+            if block_on_count > 0 {
+                log::trace!("main_loop: block_on_count={} > 0, sleeps={}", block_on_count, sleeps);
+                // Exponential backoff from 50us to 10ms.
+                let delay_us = [50, 75, 100, 250, 500, 750, 1000, 2500, 5000]
+                    .get(sleeps as usize)
+                    .unwrap_or(&10_000);
 
-            log::trace!("main_loop: sleeping for {} us", delay_us);
-            if parker.park_timeout(Duration::from_micros(*delay_us)) {
-                log::trace!("main_loop: notified");
+                log::trace!("main_loop: sleeping for {} us", delay_us);
+                if parker.park_timeout(Duration::from_micros(*delay_us)) {
+                    log::trace!("main_loop: notified");
 
-                // If notified before timeout, reset the last tick and the sleep counter.
-                last_tick = Reactor::get().ticker();
-                sleeps = 0;
-            } else {
-                sleeps += 1;
+                    // If notified before timeout, reset the last tick and the sleep counter.
+                    last_tick = Reactor::get().ticker();
+                    sleeps = 0;
+                    log::trace!("main_loop: after notification update last_tick={} zero sleeps {}", last_tick, sleeps);
+                } else {
+                    sleeps += 1;
+                    log::trace!("main_loop: no notification last_tick={} increment sleeps {}", last_tick, sleeps);
+                }
             }
         }
     }
