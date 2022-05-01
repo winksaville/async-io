@@ -276,7 +276,7 @@ pub(crate) struct ReactorLock<'a> {
 impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
     pub(crate) fn react(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        log::trace!("ReactorLock::react:+ tid={}", tid());
+        log::trace!("ReactorLock::react:+ tid={} ", tid());
         let mut wakers = Vec::new();
 
         // Process ready timers.
@@ -295,35 +295,45 @@ impl ReactorLock<'_> {
             .ticker
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1);
+        log::trace!("ReactorLock::react: tid={} tick={} call events.clear()", tid(), tick);
 
         self.events.clear();
 
         // Block on I/O events.
+        log::trace!("ReactorLock::react: tid={} tick={} retf events.clear(), call reactor.poller.wait timeout={:?}", tid(), tick, timeout);
         let res = match self.reactor.poller.wait(&mut self.events, timeout) {
             // No I/O events occurred.
             Ok(0) => {
+                log::trace!("ReactorLock::react: tid={} tick={} No I/O events+", tid(), tick);
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
                     self.reactor.process_timers(&mut wakers);
                 }
+                log::trace!("ReactorLock::react: tid={} tick={} No I/O events-", tid(), tick);
                 Ok(())
             }
 
             // At least one I/O event occurred.
-            Ok(_) => {
+            Ok(ev_count) => {
+                log::trace!("ReactorLock::react: tid={} tick={} {} I/O events+", tid(), tick, ev_count);
                 // Iterate over sources in the event list.
                 let sources = self.reactor.sources.lock().unwrap();
 
                 for ev in self.events.iter() {
+                    log::trace!("ReactorLock::react: tid={} tick={} ev={:?}", tid(), tick, ev);
                     // Check if there is a source in the table with this key.
                     if let Some(source) = sources.get(ev.key) {
                         let mut state = source.state.lock().unwrap();
+                        log::trace!("ReactorLock::react: tid={} tick={} ev={:?} in table source={:?} state={:?}", tid(), tick, ev, source, state);
 
                         // Collect wakers if a writability event was emitted.
                         for &(dir, emitted) in &[(WRITE, ev.writable), (READ, ev.readable)] {
                             if emitted {
+                                log::trace!("ReactorLock::react: tid={} tick={} dir={} emitted=True Update TICK", tid(), tick, dir);
                                 state[dir].tick = tick;
                                 state[dir].drain_into(&mut wakers);
+                            } else {
+                                log::trace!("ReactorLock::react: tid={} tick={} dir={} emitted=False", tid(), tick, dir);
                             }
                         }
 
@@ -340,24 +350,36 @@ impl ReactorLock<'_> {
                                 },
                             )?;
                         }
+                    } else {
+                        log::trace!("ReactorLock::react: tid={} tick={} ev={:?} NOT in table", tid(), tick, ev);
                     }
                 }
 
+                log::trace!("ReactorLock::react: tid={} tick={} {} I/O events-", tid(), tick, ev_count);
                 Ok(())
             }
 
             // The syscall was interrupted.
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                log::trace!("ReactorLock::react: tid={} tick={} Err={}", tid(), tick, err);
+                Ok(())
+            }
 
             // An actual error occureed.
-            Err(err) => Err(err),
+            Err(err) => {
+                log::trace!("ReactorLock::react: tid={} tick={} Err={}", tid(), tick, err);
+                Err(err)
+            }
         };
 
         // Wake up ready tasks.
-        log::debug!("ReactLock::react: {} ready wakers", wakers.len());
+        log::debug!("ReactLock::react: {} wake up ready wakers", wakers.len());
+        let mut i = 0usize;
         for waker in wakers {
             // Don't let a panicking waker blow everything up.
+            log::debug!("ReactLock::react: wakeup worker={} ", i);
             panic::catch_unwind(|| waker.wake()).ok();
+            i += 1;
         }
 
         log::trace!("ReactorLock::react:- tid={} res={:?}", tid(), res);
