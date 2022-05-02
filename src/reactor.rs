@@ -67,19 +67,24 @@ pub(crate) struct Reactor {
 impl Reactor {
     /// Returns a reference to the reactor.
     pub(crate) fn get() -> &'static Reactor {
-        log::trace!("Reactor::get:+");
         static REACTOR: Lazy<Reactor> = Lazy::new(|| {
+            log::trace!("Reactor::get:+ call crate::driver::init()");
             crate::driver::init();
-            Reactor {
+            log::trace!("Reactor::get:  retf crate::driver::init(); create reactor");
+            let reactor = Reactor {
                 poller: Poller::new().expect("cannot initialize I/O event notification"),
                 ticker: AtomicUsize::new(0),
                 sources: Mutex::new(Slab::new()),
                 events: Mutex::new(Vec::new()),
                 timers: Mutex::new(BTreeMap::new()),
+                // What happens if capacity is exceeded
                 timer_ops: ConcurrentQueue::bounded(1000),
-            }
+            };
+            log::trace!("Reactor::get:- created reactor");
+            reactor
         });
-        log::trace!("Reactor::get:-");
+
+        // Return the one and only reactor
         &REACTOR
     }
 
@@ -277,7 +282,9 @@ impl ReactorLock<'_> {
         let mut wakers = Vec::new();
 
         // Process ready timers.
+        log::trace!("ReactorLock::react: call process_timers");
         let next_timer = self.reactor.process_timers(&mut wakers);
+        log::trace!("ReactorLock::react: retf process_timers next_timer={:?}; calculate timeout", next_timer);
 
         // compute the timeout for blocking on I/O events.
         let timeout = match (next_timer, timeout) {
@@ -285,6 +292,7 @@ impl ReactorLock<'_> {
             (Some(t), None) | (None, Some(t)) => Some(t),
             (Some(a), Some(b)) => Some(a.min(b)),
         };
+        log::trace!("ReactorLock::react: timeout={:?}; bump ticker", timeout);
 
         // Bump the ticker before polling I/O.
         let tick = self
@@ -292,19 +300,21 @@ impl ReactorLock<'_> {
             .ticker
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1);
-        log::trace!("ReactorLock::react: tick={} call events.clear()", tick);
+        log::trace!("ReactorLock::react: tick={}; call events.clear()", tick);
 
         self.events.clear();
 
         // Block on I/O events.
-        log::trace!("ReactorLock::react: tick={} retf events.clear(), call reactor.poller.wait timeout={:?}", tick, timeout);
+        log::trace!("ReactorLock::react: tick={} retf events.clear(); call reactor.poller.wait timeout={:?}", tick, timeout);
         let res = match self.reactor.poller.wait(&mut self.events, timeout) {
             // No I/O events occurred.
             Ok(0) => {
                 log::trace!("ReactorLock::react: tick={} No I/O events+", tick);
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
+                    log::trace!("ReactorLock::react: tick={} call process_timers", tick);
                     self.reactor.process_timers(&mut wakers);
+                    log::trace!("ReactorLock::react: tick={} retf process_timers", tick);
                 }
                 log::trace!("ReactorLock::react: tick={} No I/O events-", tick);
                 Ok(())
