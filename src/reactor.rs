@@ -485,7 +485,6 @@ impl Source {
             if w.will_wake(cx.waker()) {
                 state[dir].waker = Some(w);
                 log::trace!("Source::poll_ready:- tid={}  dir={} Poll::Pending waker", tid(), dir);
-                log::trace!("Source::poll_ready backtrace\n{}", std::backtrace::Backtrace::force_capture());
                 return Poll::Pending;
             }
             // Wake the previous waker because it's going to get replaced.
@@ -496,7 +495,6 @@ impl Source {
             }).ok();
         }
         log::trace!("Source::poll_ready: tid={} dir={} setup new waker and new ticks", tid(), dir);
-        log::trace!("Source::poll_ready backtrace\n{}", std::backtrace::Backtrace::force_capture());
         state[dir].waker = Some(cx.waker().clone());
         state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
         log::trace!("Source::poll_ready: tid={} dir={} tick={} ticks={:?}", tid(), dir, state[dir].tick, state[dir].ticks);
@@ -696,7 +694,6 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
         };
 
         log::trace!("Ready::Future::poll tid={} insert cx.waker().clone() at state[{}].wakers[{}]", tid(), *dir, i);
-        log::trace!("Ready::Future::poll backtrace\n{}", std::backtrace::Backtrace::force_capture());
         state[*dir].wakers[i] = Some(cx.waker().clone());
 
         // Update interest in this I/O handle.
