@@ -55,7 +55,7 @@
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
-#![feature(backtrace, thread_id_value)]
+#![feature(backtrace)]
 
 use std::convert::TryFrom;
 use std::future::Future;
@@ -93,12 +93,6 @@ pub use reactor::{Readable, ReadableOwned, Writable, WritableOwned};
 fn duration_max() -> Duration {
     Duration::new(std::u64::MAX, 1_000_000_000 - 1)
 }
-
-/// Thread ID
-fn tid() -> std::num::NonZeroU64 {
-    std::thread::current().id().as_u64()
-}
-
 
 /// A future or stream that emits timed events.
 ///

@@ -22,8 +22,6 @@ use once_cell::sync::Lazy;
 use polling::{Event, Poller};
 use slab::Slab;
 
-use crate::tid;
-
 const READ: usize = 0;
 const WRITE: usize = 1;
 
@@ -275,7 +273,7 @@ pub(crate) struct ReactorLock<'a> {
 impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
     pub(crate) fn react(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        log::trace!("ReactorLock::react:+ tid={} ", tid());
+        log::trace!("ReactorLock::react:+ ");
         let mut wakers = Vec::new();
 
         // Process ready timers.
@@ -294,45 +292,45 @@ impl ReactorLock<'_> {
             .ticker
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1);
-        log::trace!("ReactorLock::react: tid={} tick={} call events.clear()", tid(), tick);
+        log::trace!("ReactorLock::react: tick={} call events.clear()", tick);
 
         self.events.clear();
 
         // Block on I/O events.
-        log::trace!("ReactorLock::react: tid={} tick={} retf events.clear(), call reactor.poller.wait timeout={:?}", tid(), tick, timeout);
+        log::trace!("ReactorLock::react: tick={} retf events.clear(), call reactor.poller.wait timeout={:?}", tick, timeout);
         let res = match self.reactor.poller.wait(&mut self.events, timeout) {
             // No I/O events occurred.
             Ok(0) => {
-                log::trace!("ReactorLock::react: tid={} tick={} No I/O events+", tid(), tick);
+                log::trace!("ReactorLock::react: tick={} No I/O events+", tick);
                 if timeout != Some(Duration::from_secs(0)) {
                     // The non-zero timeout was hit so fire ready timers.
                     self.reactor.process_timers(&mut wakers);
                 }
-                log::trace!("ReactorLock::react: tid={} tick={} No I/O events-", tid(), tick);
+                log::trace!("ReactorLock::react: tick={} No I/O events-", tick);
                 Ok(())
             }
 
             // At least one I/O event occurred.
             Ok(ev_count) => {
-                log::trace!("ReactorLock::react: tid={} tick={} {} I/O events+", tid(), tick, ev_count);
+                log::trace!("ReactorLock::react: tick={} {} I/O events+", tick, ev_count);
                 // Iterate over sources in the event list.
                 let sources = self.reactor.sources.lock().unwrap();
 
                 for ev in self.events.iter() {
-                    log::trace!("ReactorLock::react: tid={} tick={} ev={:?}", tid(), tick, ev);
+                    log::trace!("ReactorLock::react: tick={} ev={:?}", tick, ev);
                     // Check if there is a source in the table with this key.
                     if let Some(source) = sources.get(ev.key) {
                         let mut state = source.state.lock().unwrap();
-                        log::trace!("ReactorLock::react: tid={} tick={} ev={:?} in table source={:?} state={:?}", tid(), tick, ev, source, state);
+                        log::trace!("ReactorLock::react: tick={} ev={:?} in table source={:?} state={:?}", tick, ev, source, state);
 
                         // Collect wakers if a writability event was emitted.
                         for &(dir, emitted) in &[(WRITE, ev.writable), (READ, ev.readable)] {
                             if emitted {
-                                log::trace!("ReactorLock::react: tid={} tick={} dir={} emitted=True Update TICK", tid(), tick, dir);
+                                log::trace!("ReactorLock::react: tick={} dir={} emitted=True Update TICK", tick, dir);
                                 state[dir].tick = tick;
                                 state[dir].drain_into(&mut wakers);
                             } else {
-                                log::trace!("ReactorLock::react: tid={} tick={} dir={} emitted=False", tid(), tick, dir);
+                                log::trace!("ReactorLock::react: tick={} dir={} emitted=False", tick, dir);
                             }
                         }
 
@@ -350,39 +348,39 @@ impl ReactorLock<'_> {
                             )?;
                         }
                     } else {
-                        log::trace!("ReactorLock::react: tid={} tick={} ev={:?} NOT in table", tid(), tick, ev);
+                        log::trace!("ReactorLock::react: tick={} ev={:?} NOT in table", tick, ev);
                     }
                 }
 
-                log::trace!("ReactorLock::react: tid={} tick={} {} I/O events-", tid(), tick, ev_count);
+                log::trace!("ReactorLock::react: tick={} {} I/O events-", tick, ev_count);
                 Ok(())
             }
 
             // The syscall was interrupted.
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {
-                log::trace!("ReactorLock::react: tid={} tick={} Err={}", tid(), tick, err);
+                log::trace!("ReactorLock::react: tick={} Err={}", tick, err);
                 Ok(())
             }
 
             // An actual error occureed.
             Err(err) => {
-                log::trace!("ReactorLock::react: tid={} tick={} Err={}", tid(), tick, err);
+                log::trace!("ReactorLock::react: tick={} Err={}", tick, err);
                 Err(err)
             }
         };
 
         // Wake up ready tasks.
-        log::debug!("ReactorLock::react: tid={} wake up {} ready wakers", tid(), wakers.len());
+        log::debug!("ReactorLock::react: wake up {} ready wakers", wakers.len());
         let mut i = 0usize;
         for waker in wakers {
             // Don't let a panicking waker blow everything up.
-            log::debug!("ReactorLock::react: tid={} call waker.wake={} ", tid(), i);
+            log::debug!("ReactorLock::react: call waker.wake={} ", i);
             panic::catch_unwind(|| waker.wake()).ok();
-            log::debug!("ReactorLock::react: tid={} retf waker.wake={} ", tid(), i);
+            log::debug!("ReactorLock::react: retf waker.wake={} ", i);
             i += 1;
         }
 
-        log::trace!("ReactorLock::react:- tid={} res={:?}", tid(), res);
+        log::trace!("ReactorLock::react:- res={:?}", res);
         res
     }
 }
@@ -464,7 +462,7 @@ impl Source {
     /// If a different waker is already registered, it gets replaced and woken.
     fn poll_ready(&self, dir: usize, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut state = self.state.lock().unwrap();
-        log::trace!("Source::poll_ready:+ tid={} dir={} tick={} ticks={:?}", tid(), dir, state[dir].tick, state[dir].ticks);
+        log::trace!("Source::poll_ready:+ dir={} tick={} ticks={:?}", dir, state[dir].tick, state[dir].ticks);
 
         // Check if the reactor has delivered an event.
         if let Some((a, b)) = state[dir].ticks {
@@ -472,7 +470,7 @@ impl Source {
             // that means a newer reactor tick has delivered an event.
             if state[dir].tick != a && state[dir].tick != b {
                 state[dir].ticks = None;
-                log::trace!("Source::poll_ready:- tid={} dir={} tick={} ticks={:?} Poll::Ready(OK(())", tid(), dir, state[dir].tick, state[dir].ticks);
+                log::trace!("Source::poll_ready:- dir={} tick={} ticks={:?} Poll::Ready(OK(())", dir, state[dir].tick, state[dir].ticks);
                 return Poll::Ready(Ok(()));
             }
         }
@@ -484,24 +482,24 @@ impl Source {
         if let Some(w) = state[dir].waker.take() {
             if w.will_wake(cx.waker()) {
                 state[dir].waker = Some(w);
-                log::trace!("Source::poll_ready:- tid={}  dir={} Poll::Pending waker", tid(), dir);
+                log::trace!("Source::poll_ready:-  dir={} Poll::Pending waker", dir);
                 return Poll::Pending;
             }
             // Wake the previous waker because it's going to get replaced.
-            log::trace!(r#"Source::poll_ready: tid={} dir={} "wake previous waker via panic::catch_unwind""#, tid(), dir);
+            log::trace!(r#"Source::poll_ready: dir={} "wake previous waker via panic::catch_unwind""#, dir);
             panic::catch_unwind(|| {
-                log::trace!("Source::poll_ready: tid={} dir={} actually waking previous waker", tid(), dir);
+                log::trace!("Source::poll_ready: dir={} actually waking previous waker", dir);
                 w.wake()
             }).ok();
         }
-        log::trace!("Source::poll_ready: tid={} dir={} setup new waker and new ticks", tid(), dir);
+        log::trace!("Source::poll_ready: dir={} setup new waker and new ticks", dir);
         state[dir].waker = Some(cx.waker().clone());
         state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
-        log::trace!("Source::poll_ready: tid={} dir={} tick={} ticks={:?}", tid(), dir, state[dir].tick, state[dir].ticks);
+        log::trace!("Source::poll_ready: dir={} tick={} ticks={:?}", dir, state[dir].tick, state[dir].ticks);
 
         // Update interest in this I/O handle.
         if was_empty {
-            log::trace!("Source::poll_ready: tid={} dir={} was empty, call poller.modify", tid(), dir);
+            log::trace!("Source::poll_ready: dir={} was empty, call poller.modify", dir);
             if  let Err(e) = Reactor::get().poller.modify(
                 self.raw,
                 Event {
@@ -510,13 +508,13 @@ impl Source {
                     writable: !state[WRITE].is_empty(),
                 },
             ) {
-                log::trace!("Source::poll_ready: tid={} dir={} was empty, retf poller.modify Error: {}", tid(), dir, e);
+                log::trace!("Source::poll_ready: dir={} was empty, retf poller.modify Error: {}", dir, e);
             } else {
-                log::trace!("Source::poll_ready: tid={} dir={} was empty, retf poller.modify Ok", tid(), dir);
+                log::trace!("Source::poll_ready: dir={} was empty, retf poller.modify Ok", dir);
             }
         }
 
-        log::trace!("Source::poll_ready:- tid={} dir={} Poll::Pending at bottom", tid(), dir);
+        log::trace!("Source::poll_ready:- dir={} Poll::Pending at bottom", dir);
         Poll::Pending
     }
 
@@ -666,7 +664,7 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
             // If `state[dir].tick` has changed to a value other than the old reactor tick,
             // that means a newer reactor tick has delivered an event.
             if state[*dir].tick != a && state[*dir].tick != b {
-                log::trace!("Ready::Future::poll:+- tid={} New tick ret Poll::Ready(Ok(()) dir={} tick={} ticks={:?} Ready.ticks={:?}", tid(), dir, state[*dir].tick, state[*dir].ticks, (a, b));
+                log::trace!("Ready::Future::poll:+- New tick ret Poll::Ready(Ok(()) dir={} tick={} ticks={:?} Ready.ticks={:?}", dir, state[*dir].tick, state[*dir].ticks, (a, b));
                 return Poll::Ready(Ok(()));
             }
         }
@@ -674,12 +672,12 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
         let was_empty = state[*dir].is_empty();
 
         // Register the current task's waker.
-        log::trace!("Ready::Future::poll:+ tid={} Register current task's waker dir={} tick={} ticks={:?} ", tid(), dir, state[*dir].tick, state[*dir].ticks);
+        log::trace!("Ready::Future::poll:+ Register current task's waker dir={} tick={} ticks={:?} ", dir, state[*dir].tick, state[*dir].ticks);
         let i = match *index {
             Some(i) => i,
             None => {
                 let i = state[*dir].wakers.insert(None);
-                log::trace!("Ready::Future::poll: tid={} *index is None insert None at {} for the moment", tid(), i);
+                log::trace!("Ready::Future::poll: *index is None insert None at {} for the moment", i);
                 *_guard = Some(RemoveOnDrop {
                     handle: handle.clone(),
                     dir: *dir,
@@ -693,7 +691,7 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
             }
         };
 
-        log::trace!("Ready::Future::poll tid={} insert cx.waker().clone() at state[{}].wakers[{}]", tid(), *dir, i);
+        log::trace!("Ready::Future::poll insert cx.waker().clone() at state[{}].wakers[{}]", *dir, i);
         state[*dir].wakers[i] = Some(cx.waker().clone());
 
         // Update interest in this I/O handle.
@@ -704,7 +702,7 @@ impl<H: Borrow<crate::Async<T>> + Clone, T> Future for Ready<H, T> {
                     readable: !state[READ].is_empty(),
                     writable: !state[WRITE].is_empty(),
                 };
-            log::trace!("Ready::Future::poll: tid={} call poller.modify dir={} tick={} ticks={:?} raw={} ev={:?})", tid(), dir, state[*dir].tick, state[*dir].ticks, raw, ev);
+            log::trace!("Ready::Future::poll: call poller.modify dir={} tick={} ticks={:?} raw={} ev={:?})", dir, state[*dir].tick, state[*dir].ticks, raw, ev);
             Reactor::get().poller.modify(raw, ev)?;
         }
 

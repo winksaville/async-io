@@ -11,7 +11,6 @@ use once_cell::sync::Lazy;
 use waker_fn::waker_fn;
 
 use crate::reactor::Reactor;
-use crate::tid;
 
 /// Number of currently active `block_on()` invocations.
 static BLOCK_ON_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -48,7 +47,7 @@ fn main_loop(parker: parking::Parker) {
     let mut sleeps = 0u64;
 
     loop {
-        log::trace!("main_loop: TOL tid={} sleeps={}", tid(), sleeps);
+        log::trace!("main_loop: TOL sleeps={}", sleeps);
 
         let tick = Reactor::get().ticker();
 
