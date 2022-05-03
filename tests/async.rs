@@ -1,3 +1,5 @@
+#![feature(thread_id_value)]
+
 use std::future::Future;
 use std::io;
 use std::net::{Shutdown, TcpListener, TcpStream, UdpSocket};
@@ -11,6 +13,7 @@ use async_io::{Async, Timer};
 use futures_lite::{future, prelude::*};
 #[cfg(unix)]
 use tempfile::tempdir;
+use std::io::Write;
 
 const LOREM_IPSUM: &[u8] = b"
 Lorem ipsum dolor sit amet, consectetur adipiscing elit.
@@ -35,6 +38,19 @@ fn spawn<T: Send + 'static>(
 
 #[test]
 fn tcp_connect() -> io::Result<()> {
+    let env = env_logger::Env::default();
+    //env_logger::Builder::from_env(env).format_timestamp_micros().init();
+    env_logger::Builder::from_env(env).format(|buf, record| {
+        let time = std::time::SystemTime::now();
+        writeln!(buf, "[{} {:5} {} {} {:2}] {}",
+            humantime::format_rfc3339_micros(time),
+            record.level(),
+            if let Some(s) = record.module_path_static() { s } else { "" },
+            if let Some(v) = record.line() { v } else { 0 },
+            std::thread::current().id().as_u64(),
+            record.args())
+    }).init();
+
     future::block_on(async {
         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
         let addr = listener.get_ref().local_addr()?;
