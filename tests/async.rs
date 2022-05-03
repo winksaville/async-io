@@ -77,6 +77,73 @@ fn tcp_connect() -> io::Result<()> {
 }
 
 #[test]
+fn not_missing_wake() -> io::Result<()> {
+    let env = env_logger::Env::default();
+    //env_logger::Builder::from_env(env).format_timestamp_micros().init();
+    env_logger::Builder::from_env(env).format(|buf, record| {
+        let time = std::time::SystemTime::now();
+        writeln!(buf, "[{} {:5} {} {} {:2}] {}",
+            humantime::format_rfc3339_micros(time),
+            record.level(),
+            if let Some(s) = record.module_path_static() { s } else { "" },
+            if let Some(v) = record.line() { v } else { 0 },
+            std::thread::current().id().as_u64(),
+            record.args())
+    }).init();
+    log::trace!("not_missing_wake:+; block_on+");
+
+    fn abc() -> &'static str {
+        "abc"
+    }
+
+    let res = future::block_on(async {
+        log::trace!("not_missing_wake:+; block_on TOP; bind+ {}", abc());
+
+        let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
+        log::trace!("not_missing_wake: bind-; get_ref+");
+        let addr = listener.get_ref().local_addr()?;
+        log::trace!("not_missing_wake: get_ref-");
+
+
+        log::trace!("not_missing_wake: sleep+ 1000ms");
+        let delay = Duration::from_millis(1000);
+        thread::sleep(delay);
+        log::trace!("not_missing_wake: sleep- 1000ms; spawn accept");
+
+        let task = spawn(async move {
+            log::trace!("not_missing_wake: accept.await+");
+            let res = listener.accept().await;
+            log::trace!("not_missing_wake: accept.await- {:?}", res);
+
+            res
+        });
+        log::trace!("not_missing_wake: spawn- accept; connect+");
+
+        let stream2 = Async::<TcpStream>::connect(addr).await?;
+        log::trace!("not_missing_wake: connect-");
+        let stream1 = task.await?.0;
+        log::trace!("not_missing_wake: task.wait-; test stream1.peer_addr == stream2.local_addr");
+
+        assert_eq!(
+            stream1.get_ref().peer_addr()?,
+            stream2.get_ref().local_addr()?,
+        );
+
+        log::trace!("not_missing_wake: test stream2.peer_addr == stream1.local_addr");
+        assert_eq!(
+            stream2.get_ref().peer_addr()?,
+            stream1.get_ref().local_addr()?,
+        );
+
+        log::trace!("not_missing_wake: block_on BTM");
+        Ok(())
+    });
+
+    log::trace!("not_missing_wake:-");
+    res
+}
+
+#[test]
 fn tcp_peek_read() -> io::Result<()> {
     future::block_on(async {
         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
