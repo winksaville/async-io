@@ -76,8 +76,7 @@ fn tcp_connect() -> io::Result<()> {
     })
 }
 
-#[test]
-fn not_missing_wake() -> io::Result<()> {
+fn env_logger_init() {
     let env = env_logger::Env::default();
     //env_logger::Builder::from_env(env).format_timestamp_micros().init();
     env_logger::Builder::from_env(env).format(|buf, record| {
@@ -90,6 +89,11 @@ fn not_missing_wake() -> io::Result<()> {
             std::thread::current().id().as_u64(),
             record.args())
     }).init();
+}
+
+#[test]
+fn not_missing_wake() -> io::Result<()> {
+    env_logger_init();
     log::trace!("not_missing_wake:+; block_on+");
 
     fn abc() -> &'static str {
@@ -141,6 +145,15 @@ fn not_missing_wake() -> io::Result<()> {
 
     log::trace!("not_missing_wake:-");
     res
+}
+
+#[test]
+fn test_it() -> io::Result<()> {
+    env_logger_init();
+    log::trace!("test_it:+");
+
+    log::trace!("test_it:-");
+    Ok(())
 }
 
 #[test]
