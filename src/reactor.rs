@@ -124,13 +124,15 @@ impl Reactor {
             return Err(err);
         }
 
-        log::trace!("Reactor::insert_io:- raw fd={} source={:?}", raw, source);
+        //log::trace!("Reactor::insert_io:- raw fd={} source={:?}", raw, source);
+        log::trace!("Reactor::insert_io:- raw fd={}", raw);
         Ok(source)
     }
 
     /// Deregisters an I/O source from the reactor.
     pub(crate) fn remove_io(&self, source: &Source) -> io::Result<()> {
-        log::trace!("Reactor::remove_io:+- raw fd={} source {:?} ", source.raw, source);
+        //log::trace!("Reactor::remove_io:+- raw fd={} source={:?} ", source.raw, source);
+        log::trace!("Reactor::remove_io:+- raw fd={}", source.raw);
         let mut sources = self.sources.lock().unwrap();
         sources.remove(source.key);
         self.poller.delete(source.raw)
@@ -300,7 +302,7 @@ impl ReactorLock<'_> {
             .ticker
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1);
-        log::trace!("ReactorLock::react: tick={}; call events.clear()", tick);
+        log::trace!("ReactorLock::react: bumped ticker tick={}; call events.clear()", tick);
 
         self.events.clear();
 
@@ -331,7 +333,8 @@ impl ReactorLock<'_> {
                     // Check if there is a source in the table with this key.
                     if let Some(source) = sources.get(ev.key) {
                         let mut state = source.state.lock().unwrap();
-                        log::trace!("ReactorLock::react: tick={} ev={:?} in table raw fd={} source={:?} state={:?}", tick, ev, source.raw, source, state);
+                        //log::trace!("ReactorLock::react: tick={} ev={:?} in table raw fd={} source={:?} state={:?}", tick, ev, source.raw, source, state);
+                        log::trace!("ReactorLock::react: tick={} ev={:?} in table raw fd={}", tick, ev, source.raw);
 
                         // Collect wakers if a writability event was emitted.
                         for &(dir, emitted) in &[(WRITE, ev.writable), (READ, ev.readable)] {
