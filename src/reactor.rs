@@ -509,9 +509,17 @@ impl Source {
         }
         log::trace!("Source::poll_ready: dir={} raw fd={} setup new waker and new ticks", dir, self.raw);
         state[dir].waker = Some(cx.waker().clone());
-        //state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
+        // Using Reactor::get().ticker() is a bug, you cannot assume that
+        // the waker.wake code invoked by ReactorLock::react() has completed
+        // or potentially even started. So doing the following is a bug:
+        //   state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
+        //
+        // Using the tick value maybe OK as it was from a previous cycle. But
+        // one question, why is ticks a two tuple? What is magical about two values
+        // as opposed to 1 or 3 or 10 or 1000 or ... ?
+        //
+        // Another possible fix it to just set `state[dir].ticks = None`.
         state[dir].ticks = Some((state[dir].tick, 0));
-        //state[dir].ticks = None;
         log::trace!("Source::poll_ready: dir={} raw fd={} tick={} ticks={:?}", dir, self.raw, state[dir].tick, state[dir].ticks);
 
         // Update interest in this I/O handle.
