@@ -509,7 +509,9 @@ impl Source {
         }
         log::trace!("Source::poll_ready: dir={} raw fd={} setup new waker and new ticks", dir, self.raw);
         state[dir].waker = Some(cx.waker().clone());
-        state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
+        //state[dir].ticks = Some((Reactor::get().ticker(), state[dir].tick));
+        state[dir].ticks = Some((state[dir].tick, 0));
+        //state[dir].ticks = None;
         log::trace!("Source::poll_ready: dir={} raw fd={} tick={} ticks={:?}", dir, self.raw, state[dir].tick, state[dir].ticks);
 
         // Update interest in this I/O handle.
